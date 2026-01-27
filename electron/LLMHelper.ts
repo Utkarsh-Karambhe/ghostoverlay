@@ -8,7 +8,45 @@ interface OllamaResponse {
 
 export class LLMHelper {
   private model: GenerativeModel | null = null
-  private readonly systemPrompt = `You are Wingman AI, a helpful, proactive assistant for any kind of problem or situation (not just coding). For any user input, analyze the situation, provide a clear problem statement, relevant context, and suggest several possible responses or actions the user could take next. Always explain your reasoning. Present your suggestions as a list of options or next steps.`
+  // UPDATED PROMPT: More direct and balanced for code vs text
+  private readonly systemPrompt = `You are Wingman AI, a professional-grade assistant designed for developers and technical professionals.
+
+CORE BEHAVIOR:
+1. Be direct and professional—no fluff, no "Here's the code" preamble.
+2. For coding: Provide production-ready code first, then brief explanation only if asked.
+3. For non-coding: Use bullet points or numbered lists; keep answers concise.
+4. Always assume the user is intelligent and time-constrained.
+
+CODE QUALITY RULES:
+- Write code that follows industry best practices (SOLID, DRY, error handling).
+- Include comments only for non-obvious logic or business rules.
+- For Java: Follow Google/Oracle style guide (camelCase, proper indentation, 100-char line limit).
+- For Python: Follow PEP 8 standards.
+- Always handle errors gracefully (try-catch, null checks, validation).
+- If code requires setup/dependencies, list them explicitly.
+
+ACCURACY & TRUTHFULNESS:
+- Do NOT invent APIs, libraries, or methods that don't exist.
+- If you're unsure about syntax or behavior, say "I'm not certain" and explain why.
+- If the question lacks context, ask 1 clarifying questions before answering.
+- Avoid over-claiming; be specific about version numbers, frameworks, and compatibility.
+
+OUTPUT FORMATTING:
+- Code blocks: Use proper language tags (\`\`\`java, \`\`\`python, \`\`\`javascript).
+- Preserve indentation and line breaks—never minify or compress.
+- If multiple files are needed, clearly label each file with its path/name.
+- If response spans multiple concepts, use clear section headers.
+
+REFUSAL RULES:
+- Refuse requests for: cheating/exam assistance, bypassing security, harmful/illegal actions.
+- If a request seems unethical, offer a legitimate alternative (e.g., "Learning resources" instead of "exam answers").
+
+EDGE CASES:
+- If the problem is ambiguous or underspecified, ask clarifying questions.
+- If performance/security tradeoffs exist, mention them.
+- If deprecated syntax is detected, suggest the modern alternative.`
+
+  
   private useOllama: boolean = false
   private ollamaModel: string = "llama3.2"
   private ollamaUrl: string = "http://localhost:11434"
@@ -18,7 +56,7 @@ export class LLMHelper {
     
     if (useOllama) {
       this.ollamaUrl = ollamaUrl || "http://localhost:11434"
-      this.ollamaModel = ollamaModel || "gemma:latest" // Default fallback
+      this.ollamaModel = ollamaModel || "llama3.2" // Default fallback
       console.log(`[LLMHelper] Using Ollama with model: ${this.ollamaModel}`)
       
       // Auto-detect and use first available model if specified model doesn't exist
@@ -28,7 +66,8 @@ export class LLMHelper {
       this.model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
       console.log("[LLMHelper] Using Google Gemini")
     } else {
-      throw new Error("Either provide Gemini API key or enable Ollama mode")
+      // It is okay to initialize without keys if we switch later, but warn
+      console.warn("[LLMHelper] No API key or Ollama enabled initially.")
     }
   }
 
@@ -74,6 +113,7 @@ export class LLMHelper {
 
       const data: OllamaResponse = await response.json()
       return data.response
+
     } catch (error) {
       console.error("[LLMHelper] Error calling Ollama:", error)
       throw new Error(`Failed to connect to Ollama: ${error.message}. Make sure Ollama is running on ${this.ollamaUrl}`)
@@ -123,6 +163,11 @@ export class LLMHelper {
 
   public async extractProblemFromImages(imagePaths: string[]) {
     try {
+      // Only Gemini supports multi-modal image analysis easily via this SDK
+      if (this.useOllama || !this.model) {
+         throw new Error("Image extraction requires Gemini mode. Ollama vision not fully implemented in this helper.")
+      }
+
       const imageParts = await Promise.all(imagePaths.map(path => this.fileToGenerativePart(path)))
       
       const prompt = `${this.systemPrompt}\n\nYou are a wingman. Please analyze these images and extract the following information in JSON format:\n{
@@ -155,13 +200,21 @@ export class LLMHelper {
 
     console.log("[LLMHelper] Calling Gemini LLM for solution...");
     try {
-      const result = await this.model.generateContent(prompt)
-      console.log("[LLMHelper] Gemini LLM returned result.");
-      const response = await result.response
-      const text = this.cleanJsonResponse(response.text())
-      const parsed = JSON.parse(text)
-      console.log("[LLMHelper] Parsed LLM response:", parsed)
-      return parsed
+      if (this.useOllama) {
+         // Fallback for Ollama JSON handling if needed (Ollama JSON mode is tricky, basic text preferred)
+         const textResponse = await this.callOllama(prompt);
+         const cleaned = this.cleanJsonResponse(textResponse);
+         return JSON.parse(cleaned);
+      } else if (this.model) {
+         const result = await this.model.generateContent(prompt)
+         console.log("[LLMHelper] Gemini LLM returned result.");
+         const response = await result.response
+         const text = this.cleanJsonResponse(response.text())
+         const parsed = JSON.parse(text)
+         console.log("[LLMHelper] Parsed LLM response:", parsed)
+         return parsed
+      }
+      throw new Error("No provider configured");
     } catch (error) {
       console.error("[LLMHelper] Error in generateSolution:", error);
       throw error;
@@ -170,6 +223,10 @@ export class LLMHelper {
 
   public async debugSolutionWithImages(problemInfo: any, currentCode: string, debugImagePaths: string[]) {
     try {
+       if (this.useOllama || !this.model) {
+         throw new Error("Visual debugging requires Gemini mode.")
+      }
+
       const imageParts = await Promise.all(debugImagePaths.map(path => this.fileToGenerativePart(path)))
       
       const prompt = `${this.systemPrompt}\n\nYou are a wingman. Given:\n1. The original problem or situation: ${JSON.stringify(problemInfo, null, 2)}\n2. The current response or approach: ${currentCode}\n3. The debug information in the provided images\n\nPlease analyze the debug information and provide feedback in this JSON format:\n{
@@ -195,6 +252,12 @@ export class LLMHelper {
   }
 
   public async analyzeAudioFile(audioPath: string) {
+    // --- FIX: Check for Ollama mode ---
+    if (this.useOllama || !this.model) {
+      console.warn("Audio analysis skipped: Local Ollama does not support audio files.");
+      return { text: "Audio analysis requires Gemini mode.", timestamp: Date.now() };
+    }
+
     try {
       const audioData = await fs.promises.readFile(audioPath);
       const audioPart = {
@@ -203,7 +266,7 @@ export class LLMHelper {
           mimeType: "audio/mp3"
         }
       };
-      const prompt = `${this.systemPrompt}\n\nDescribe this audio clip in a short, concise answer. In addition to your main answer, suggest several possible actions or responses the user could take next based on the audio. Do not return a structured JSON object, just answer naturally as you would to a user.`;
+      const prompt = `${this.systemPrompt}\n\nDescribe this audio clip in a short, concise answer.`;
       const result = await this.model.generateContent([prompt, audioPart]);
       const response = await result.response;
       const text = response.text();
@@ -215,6 +278,12 @@ export class LLMHelper {
   }
 
   public async analyzeAudioFromBase64(data: string, mimeType: string) {
+    // --- FIX: Check for Ollama mode ---
+    if (this.useOllama || !this.model) {
+      console.warn("Audio analysis skipped: Local Ollama does not support audio base64.");
+      return { text: "Audio analysis requires Gemini mode.", timestamp: Date.now() };
+    }
+
     try {
       const audioPart = {
         inlineData: {
@@ -222,7 +291,7 @@ export class LLMHelper {
           mimeType
         }
       };
-      const prompt = `${this.systemPrompt}\n\nDescribe this audio clip in a short, concise answer. In addition to your main answer, suggest several possible actions or responses the user could take next based on the audio. Do not return a structured JSON object, just answer naturally as you would to a user and be concise.`;
+      const prompt = `${this.systemPrompt}\n\nDescribe this audio clip in a short, concise answer.`;
       const result = await this.model.generateContent([prompt, audioPart]);
       const response = await result.response;
       const text = response.text();
@@ -235,24 +304,66 @@ export class LLMHelper {
 
   public async analyzeImageFile(imagePath: string) {
     try {
-      const imageData = await fs.promises.readFile(imagePath);
+      // If using Ollama, we try to use LLaVA if installed, otherwise basic text fallback
+      // For now, let's assume if it's Ollama, we just can't do vision unless the model supports it.
+      if (this.useOllama) {
+         // Simple fallback if you wanted to implement LLaVA later
+         return { text: "Image analysis requires Gemini or a Vision-capable Ollama model (e.g. LLaVA).", timestamp: Date.now() }
+      }
+
+      if (!this.model) throw new Error("No Gemini model available");
+
+      const imageData = await fs.promises.readFile(imagePath)
+  
       const imagePart = {
         inlineData: {
           data: imageData.toString("base64"),
           mimeType: "image/png"
         }
-      };
-      const prompt = `${this.systemPrompt}\n\nDescribe the content of this image in a short, concise answer. In addition to your main answer, suggest several possible actions or responses the user could take next based on the image. Do not return a structured JSON object, just answer naturally as you would to a user. Be concise and brief.`;
-      const result = await this.model.generateContent([prompt, imagePart]);
-      const response = await result.response;
-      const text = response.text();
-      return { text, timestamp: Date.now() };
+      }
+  
+      const prompt = `
+  ${this.systemPrompt}
+  
+  You are analyzing a screenshot provided by the user.
+  
+  IMPORTANT OUTPUT RULES (STRICT):
+  - If your answer contains ANY code, you MUST:
+    - Wrap the code in a Markdown code block (triple backticks)
+    - Specify the language (e.g. \`\`\`java, \`\`\`python)
+    - Preserve proper indentation and line breaks
+    - NEVER return code in a single line
+    - Each import, statement, and block must be on its own line
+  
+  - If the code is Java:
+    - Each import must be on a new line
+    - Use standard Java formatting
+    - Properly indent classes, methods, and loops
+  
+  - If the answer does NOT require code:
+    - Respond in clear, readable paragraphs or bullet points
+  
+  TASK:
+  1. Briefly describe what is shown in the image.
+  2. If the image implies a coding problem or question, provide a clear and well-formatted solution.
+  3. Suggest a few possible next actions the user could take.
+  
+  Do NOT return JSON.
+  Do NOT compress or minify output.
+  Formatting quality is very important.
+  `
+  
+      const result = await this.model.generateContent([prompt, imagePart])
+      const response = await result.response
+      const text = response.text()
+  
+      return { text, timestamp: Date.now() }
     } catch (error) {
-      console.error("Error analyzing image file:", error);
-      throw error;
+      console.error("Error analyzing image file:", error)
+      throw error
     }
   }
-
+  
   public async chatWithGemini(message: string): Promise<string> {
     try {
       if (this.useOllama) {
@@ -357,4 +468,4 @@ export class LLMHelper {
       return { success: false, error: error.message };
     }
   }
-} 
+}

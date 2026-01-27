@@ -1,9 +1,10 @@
 
-import { BrowserWindow, screen } from "electron"
+import { BrowserWindow, screen, app } from "electron"
 import { AppState } from "main"
 import path from "node:path"
 
-const isDev = process.env.NODE_ENV === "development"
+const isDev = !app.isPackaged
+
 
 const startUrl = isDev
   ? "http://localhost:5180"
@@ -15,6 +16,8 @@ export class WindowHelper {
   private windowPosition: { x: number; y: number } | null = null
   private windowSize: { width: number; height: number } | null = null
   private appState: AppState
+  private isSnippingMode: boolean = false;
+
 
   // Initialize with explicit number type and 0 value
   private screenWidth: number = 0
@@ -27,7 +30,59 @@ export class WindowHelper {
     this.appState = appState
   }
 
+  // Inside WindowHelper class in WindowHelper.ts
+
+  public createSnippingWindow(): void {
+    if (!this.mainWindow) return;
+    this.isSnippingMode = true;
+
+  
+    // Save current state
+    const bounds = this.mainWindow.getBounds();
+    (this.appState as any).savedBounds = bounds;
+  
+    // Make window cover the whole primary display (no macOS fullscreen transition)
+    const displayBounds = screen.getPrimaryDisplay().bounds;
+    this.mainWindow.setBounds(displayBounds);
+  
+    this.mainWindow.setResizable(false);
+    this.mainWindow.setMovable(false);
+    this.mainWindow.setIgnoreMouseEvents(false);
+    this.mainWindow.setAlwaysOnTop(true, "screen-saver");
+
+  
+    this.mainWindow.show();
+    this.mainWindow.focus();
+  
+    // Tell React to render overlay
+    this.mainWindow.webContents.send("enter-snipping-mode");
+  }
+  
+  public restoreWindowAfterSnip(): void {
+    
+
+    if (!this.mainWindow) return;
+    this.isSnippingMode = false;
+  
+    const savedBounds = (this.appState as any).savedBounds;
+  
+    this.mainWindow.setResizable(true);
+    this.mainWindow.setMovable(true);
+  
+    if (savedBounds) {
+      this.mainWindow.setBounds(savedBounds);
+    } else {
+      this.centerWindow();
+    }
+  
+    this.mainWindow.show();
+    this.mainWindow.setAlwaysOnTop(true);
+  }
+  
+
   public setWindowDimensions(width: number, height: number): void {
+    if (this.isSnippingMode) return;
+
     if (!this.mainWindow || this.mainWindow.isDestroyed()) return
 
     // Get current window position
@@ -98,7 +153,7 @@ export class WindowHelper {
     }
 
     this.mainWindow = new BrowserWindow(windowSettings)
-    // this.mainWindow.webContents.openDevTools()
+    
     this.mainWindow.setContentProtection(true)
 
     if (process.platform === "darwin") {

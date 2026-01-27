@@ -1,10 +1,14 @@
-// ScreenshotHelper.ts
-
-import path from "node:path"
-import fs from "node:fs"
+import { join } from "path"
 import { app } from "electron"
+import * as fs from "fs"
+import { exec } from "child_process"
+import { promisify } from "util"
+import Tesseract from 'tesseract.js';
 import { v4 as uuidv4 } from "uuid"
-import screenshot from "screenshot-desktop"
+import { createWorker } from 'tesseract.js';
+
+// Use native macOS command for reliability
+const execAsync = promisify(exec)
 
 export class ScreenshotHelper {
   private screenshotQueue: string[] = []
@@ -20,18 +24,18 @@ export class ScreenshotHelper {
     this.view = view
 
     // Initialize directories
-    this.screenshotDir = path.join(app.getPath("userData"), "screenshots")
-    this.extraScreenshotDir = path.join(
+    this.screenshotDir = join(app.getPath("userData"), "screenshots")
+    this.extraScreenshotDir = join(
       app.getPath("userData"),
       "extra_screenshots"
     )
 
     // Create directories if they don't exist
     if (!fs.existsSync(this.screenshotDir)) {
-      fs.mkdirSync(this.screenshotDir)
+      fs.mkdirSync(this.screenshotDir, { recursive: true })
     }
     if (!fs.existsSync(this.extraScreenshotDir)) {
-      fs.mkdirSync(this.extraScreenshotDir)
+      fs.mkdirSync(this.extraScreenshotDir, { recursive: true })
     }
   }
 
@@ -52,27 +56,56 @@ export class ScreenshotHelper {
   }
 
   public clearQueues(): void {
-    // Clear screenshotQueue
-    this.screenshotQueue.forEach((screenshotPath) => {
-      fs.unlink(screenshotPath, (err) => {
-        if (err)
-          console.error(`Error deleting screenshot at ${screenshotPath}:`, err)
-      })
-    })
-    this.screenshotQueue = []
+    const clearDir = (dir: string) => {
+      if (fs.existsSync(dir)) {
+        const files = fs.readdirSync(dir)
+        for (const file of files) {
+          try {
+            fs.unlinkSync(join(dir, file))
+          } catch (e) {
+            console.error(`Failed to delete ${file}`, e)
+          }
+        }
+      }
+    }
 
-    // Clear extraScreenshotQueue
-    this.extraScreenshotQueue.forEach((screenshotPath) => {
-      fs.unlink(screenshotPath, (err) => {
-        if (err)
-          console.error(
-            `Error deleting extra screenshot at ${screenshotPath}:`,
-            err
-          )
-      })
-    })
+    clearDir(this.screenshotDir)
+    clearDir(this.extraScreenshotDir)
+    
+    this.screenshotQueue = []
     this.extraScreenshotQueue = []
   }
+
+  /**
+   * EXTRACT TEXT FROM IMAGE (OCR)
+   */
+    /**
+   * EXTRACT TEXT FROM IMAGE (OCR)
+   */
+      /**
+   * EXTRACT TEXT FROM IMAGE (OCR)
+   */
+  async extractTextFromImage(imageBuffer: Buffer): Promise<string> {
+    try {
+      console.log("Running OCR on screenshot...");
+      
+      // Simple approach: just use recognize() directly
+      // Tesseract.js will download the language file if needed
+      const { data: { text } } = await Tesseract.recognize(
+        imageBuffer,
+        'eng'
+      );
+      
+      console.log(`OCR Extracted ${text.length} characters.`);
+      return text.trim();
+      
+    } catch (error) {
+      console.error("OCR Failed:", error);
+      return ""; // Return empty string, not error message
+    }
+  }
+
+  
 
   public async takeScreenshot(
     hideMainWindow: () => void,
@@ -81,50 +114,63 @@ export class ScreenshotHelper {
     try {
       hideMainWindow()
       
-      // Add a small delay to ensure window is hidden
-      await new Promise(resolve => setTimeout(resolve, 100))
-      
+      // Wait for window to disappear animation (increased to 300ms)
+      await new Promise(resolve => setTimeout(resolve, 300))
+
       let screenshotPath = ""
+      const filename = `${uuidv4()}.png`
 
       if (this.view === "queue") {
-        screenshotPath = path.join(this.screenshotDir, `${uuidv4()}.png`)
-        await screenshot({ filename: screenshotPath })
-
-        this.screenshotQueue.push(screenshotPath)
-        if (this.screenshotQueue.length > this.MAX_SCREENSHOTS) {
-          const removedPath = this.screenshotQueue.shift()
-          if (removedPath) {
-            try {
-              await fs.promises.unlink(removedPath)
-            } catch (error) {
-              console.error("Error removing old screenshot:", error)
-            }
-          }
-        }
+        screenshotPath = join(this.screenshotDir, filename)
       } else {
-        screenshotPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
-        await screenshot({ filename: screenshotPath })
+        screenshotPath = join(this.extraScreenshotDir, filename)
+      }
 
+      console.log(`Taking screenshot to: ${screenshotPath}`)
+
+      // USE NATIVE MACOS COMMAND
+      // -m: Capture MAIN monitor (fixes the tiny screenshot bug)
+      // -x: No sound
+      // -C: Capture cursor
+      // -t png: Force PNG format
+      await execAsync(`screencapture -m -x -C -t png "${screenshotPath}"`)
+
+      // Wait for file to exist
+      await this.waitForFile(screenshotPath, 5000)
+
+      // Add to queue
+      if (this.view === "queue") {
+        this.screenshotQueue.push(screenshotPath)
+        this.manageQueueSize(this.screenshotQueue)
+      } else {
         this.extraScreenshotQueue.push(screenshotPath)
-        if (this.extraScreenshotQueue.length > this.MAX_SCREENSHOTS) {
-          const removedPath = this.extraScreenshotQueue.shift()
-          if (removedPath) {
-            try {
-              await fs.promises.unlink(removedPath)
-            } catch (error) {
-              console.error("Error removing old screenshot:", error)
-            }
-          }
-        }
+        this.manageQueueSize(this.extraScreenshotQueue)
       }
 
       return screenshotPath
-    } catch (error) {
+
+    } catch (error: any) {
       console.error("Error taking screenshot:", error)
+      // Check for common permission error text
+      if (error.stderr && error.stderr.includes("permission")) {
+        throw new Error("Permission denied. Please allow Screen Recording for Terminal/VS Code in System Settings.")
+      }
       throw new Error(`Failed to take screenshot: ${error.message}`)
     } finally {
-      // Ensure window is always shown again
       showMainWindow()
+    }
+  }
+
+  private manageQueueSize(queue: string[]) {
+    if (queue.length > this.MAX_SCREENSHOTS) {
+      const removedPath = queue.shift()
+      if (removedPath) {
+        try {
+          if (fs.existsSync(removedPath)) fs.unlinkSync(removedPath)
+        } catch (error) {
+          console.error("Error removing old screenshot:", error)
+        }
+      }
     }
   }
 
@@ -138,24 +184,30 @@ export class ScreenshotHelper {
     }
   }
 
-  public async deleteScreenshot(
-    path: string
-  ): Promise<{ success: boolean; error?: string }> {
+  public async deleteScreenshot(path: string): Promise<{ success: boolean; error?: string }> {
     try {
-      await fs.promises.unlink(path)
-      if (this.view === "queue") {
-        this.screenshotQueue = this.screenshotQueue.filter(
-          (filePath) => filePath !== path
-        )
-      } else {
-        this.extraScreenshotQueue = this.extraScreenshotQueue.filter(
-          (filePath) => filePath !== path
-        )
-      }
+      if (fs.existsSync(path)) fs.unlinkSync(path)
+      
+      this.screenshotQueue = this.screenshotQueue.filter(p => p !== path)
+      this.extraScreenshotQueue = this.extraScreenshotQueue.filter(p => p !== path)
+      
       return { success: true }
-    } catch (error) {
-      console.error("Error deleting file:", error)
+    } catch (error: any) {
       return { success: false, error: error.message }
+    }
+  }
+
+  private async waitForFile(filePath: string, timeoutMs: number): Promise<void> {
+    const start = Date.now()
+    while (true) {
+      if (fs.existsSync(filePath)) {
+        const stats = fs.statSync(filePath)
+        if (stats.size > 0) return
+      }
+      if (Date.now() - start > timeoutMs) {
+        throw new Error(`Screenshot file not found after ${timeoutMs}ms`)
+      }
+      await new Promise(res => setTimeout(res, 100))
     }
   }
 }

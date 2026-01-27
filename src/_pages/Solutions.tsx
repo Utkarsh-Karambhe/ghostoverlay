@@ -1,565 +1,258 @@
-// Solutions.tsx
 import React, { useState, useEffect, useRef } from "react"
-import { useQuery, useQueryClient } from "react-query"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
-import { dracula } from "react-syntax-highlighter/dist/esm/styles/prism"
-
-import ScreenshotQueue from "../components/Queue/ScreenshotQueue"
-import {
-  Toast,
-  ToastDescription,
-  ToastMessage,
-  ToastTitle,
-  ToastVariant
-} from "../components/ui/toast"
-import { ProblemStatementData } from "../types/solutions"
-import { AudioResult } from "../types/audio"
-import SolutionCommands from "../components/Solutions/SolutionCommands"
-import Debug from "./Debug"
-
-// (Using global ElectronAPI type from src/types/electron.d.ts)
-
-export const ContentSection = ({
-  title,
-  content,
-  isLoading
-}: {
-  title: string
-  content: React.ReactNode
-  isLoading: boolean
-}) => (
-  <div className="space-y-2">
-    <h2 className="text-[13px] font-medium text-white tracking-wide">
-      {title}
-    </h2>
-    {isLoading ? (
-      <div className="mt-4 flex">
-        <p className="text-xs bg-gradient-to-r from-gray-300 via-gray-100 to-gray-300 bg-clip-text text-transparent animate-pulse">
-          Extracting problem statement...
-        </p>
-      </div>
-    ) : (
-      <div className="text-[13px] leading-[1.4] text-gray-100 max-w-[600px]">
-        {content}
-      </div>
-    )}
-  </div>
-)
-const SolutionSection = ({
-  title,
-  content,
-  isLoading
-}: {
-  title: string
-  content: React.ReactNode
-  isLoading: boolean
-}) => (
-  <div className="space-y-2">
-    <h2 className="text-[13px] font-medium text-white tracking-wide">
-      {title}
-    </h2>
-    {isLoading ? (
-      <div className="space-y-1.5">
-        <div className="mt-4 flex">
-          <p className="text-xs bg-gradient-to-r from-gray-300 via-gray-100 to-gray-300 bg-clip-text text-transparent animate-pulse">
-            Loading solutions...
-          </p>
-        </div>
-      </div>
-    ) : (
-      <div className="w-full">
-        <SyntaxHighlighter
-          showLineNumbers
-          language="python"
-          style={dracula}
-          customStyle={{
-            maxWidth: "100%",
-            margin: 0,
-            padding: "1rem",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-all"
-          }}
-          wrapLongLines={true}
-        >
-          {content as string}
-        </SyntaxHighlighter>
-      </div>
-    )}
-  </div>
-)
-
-export const ComplexitySection = ({
-  timeComplexity,
-  spaceComplexity,
-  isLoading
-}: {
-  timeComplexity: string | null
-  spaceComplexity: string | null
-  isLoading: boolean
-}) => (
-  <div className="space-y-2">
-    <h2 className="text-[13px] font-medium text-white tracking-wide">
-      Complexity (Updated)
-    </h2>
-    {isLoading ? (
-      <p className="text-xs bg-gradient-to-r from-gray-300 via-gray-100 to-gray-300 bg-clip-text text-transparent animate-pulse">
-        Calculating complexity...
-      </p>
-    ) : (
-      <div className="space-y-1">
-        <div className="flex items-start gap-2 text-[13px] leading-[1.4] text-gray-100">
-          <div className="w-1 h-1 rounded-full bg-blue-400/80 mt-2 shrink-0" />
-          <div>
-            <strong>Time:</strong> {timeComplexity}
-          </div>
-        </div>
-        <div className="flex items-start gap-2 text-[13px] leading-[1.4] text-gray-100">
-          <div className="w-1 h-1 rounded-full bg-blue-400/80 mt-2 shrink-0" />
-          <div>
-            <strong>Space:</strong> {spaceComplexity}
-          </div>
-        </div>
-      </div>
-    )}
-  </div>
-)
+import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism"
 
 interface SolutionsProps {
-  setView: React.Dispatch<React.SetStateAction<"queue" | "solutions" | "debug">>
+  setView: React.Dispatch<React.SetStateAction<"queue" | "solutions" | "debug" | "snipping">>
 }
+
 const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
-  const queryClient = useQueryClient()
+  const [solution, setSolution] = useState<any>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-
-  // Audio recording state
-  const [audioRecording, setAudioRecording] = useState(false)
-  const [audioResult, setAudioResult] = useState<AudioResult | null>(null)
-
-  const [debugProcessing, setDebugProcessing] = useState(false)
-  const [problemStatementData, setProblemStatementData] =
-    useState<ProblemStatementData | null>(null)
-  const [solutionData, setSolutionData] = useState<string | null>(null)
-  const [thoughtsData, setThoughtsData] = useState<string[] | null>(null)
-  const [timeComplexityData, setTimeComplexityData] = useState<string | null>(
-    null
-  )
-  const [spaceComplexityData, setSpaceComplexityData] = useState<string | null>(
-    null
-  )
-  const [customContent, setCustomContent] = useState<string | null>(null)
-
-  const [toastOpen, setToastOpen] = useState(false)
-  const [toastMessage, setToastMessage] = useState<ToastMessage>({
-    title: "",
-    description: "",
-    variant: "neutral"
-  })
-
-  const [isTooltipVisible, setIsTooltipVisible] = useState(false)
-  const [tooltipHeight, setTooltipHeight] = useState(0)
-
-  const [isResetting, setIsResetting] = useState(false)
-
-  const { data: extraScreenshots = [], refetch } = useQuery<Array<{ path: string; preview: string }>, Error>(
-    ["extras"],
-    async () => {
-      try {
-        const existing = await window.electronAPI.getScreenshots()
-        return existing
-      } catch (error) {
-        console.error("Error loading extra screenshots:", error)
-        return []
-      }
-    },
-    {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    }
-  )
-
-  const showToast = (
-    title: string,
-    description: string,
-    variant: ToastVariant
-  ) => {
-    setToastMessage({ title, description, variant })
-    setToastOpen(true)
-  }
-
-  const handleDeleteExtraScreenshot = async (index: number) => {
-    const screenshotToDelete = extraScreenshots[index]
-
-    try {
-      const response = await window.electronAPI.deleteScreenshot(
-        screenshotToDelete.path
-      )
-
-      if (response.success) {
-        refetch() // Refetch screenshots instead of managing state directly
-      } else {
-        console.error("Failed to delete extra screenshot:", response.error)
-      }
-    } catch (error) {
-      console.error("Error deleting extra screenshot:", error)
-    }
-  }
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
-    // Height update logic
     const updateDimensions = () => {
       if (contentRef.current) {
-        let contentHeight = contentRef.current.scrollHeight
-        const contentWidth = contentRef.current.scrollWidth
-        if (isTooltipVisible) {
-          contentHeight += tooltipHeight
-        }
         window.electronAPI.updateContentDimensions({
-          width: contentWidth,
-          height: contentHeight
+          width: contentRef.current.scrollWidth,
+          height: contentRef.current.scrollHeight
         })
       }
     }
-
-    // Initialize resize observer
-    const resizeObserver = new ResizeObserver(updateDimensions)
-    if (contentRef.current) {
-      resizeObserver.observe(contentRef.current)
-    }
+    const observer = new ResizeObserver(updateDimensions)
+    if (contentRef.current) observer.observe(contentRef.current)
     updateDimensions()
-
-    // Set up event listeners
-    const cleanupFunctions = [
-      window.electronAPI.onScreenshotTaken(() => refetch()),
-      window.electronAPI.onResetView(() => {
-        // Set resetting state first
-        setIsResetting(true)
-
-        // Clear the queries
-        queryClient.removeQueries(["solution"])
-        queryClient.removeQueries(["new_solution"])
-
-        // Reset other states
-        refetch()
-
-        // After a small delay, clear the resetting state
-        setTimeout(() => {
-          setIsResetting(false)
-        }, 0)
-      }),
-      window.electronAPI.onSolutionStart(async () => {
-        // Reset UI state for a new solution
-        setSolutionData(null)
-        setThoughtsData(null)
-        setTimeComplexityData(null)
-        setSpaceComplexityData(null)
-        setCustomContent(null)
-        setAudioResult(null)
-
-        // Start audio recording from user's microphone
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-          const mediaRecorder = new MediaRecorder(stream)
-          const chunks: Blob[] = []
-          mediaRecorder.ondataavailable = (e) => chunks.push(e.data)
-          mediaRecorder.start()
-          setAudioRecording(true)
-          // Record for 5 seconds (or adjust as needed)
-          setTimeout(() => mediaRecorder.stop(), 5000)
-          mediaRecorder.onstop = async () => {
-            setAudioRecording(false)
-            const blob = new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' })
-            const reader = new FileReader()
-            reader.onloadend = async () => {
-              const base64Data = (reader.result as string).split(',')[1]
-              // Send audio to Gemini for analysis
-              try {
-                const result = await window.electronAPI.analyzeAudioFromBase64(
-                  base64Data,
-                  blob.type
-                )
-                // Store result in react-query cache
-                queryClient.setQueryData(["audio_result"], result)
-                setAudioResult(result)
-              } catch (err) {
-                console.error('Audio analysis failed:', err)
-              }
-            }
-            reader.readAsDataURL(blob)
-          }
-        } catch (err) {
-          console.error('Audio recording error:', err)
-        }
-
-        // Simulate receiving custom content shortly after start
-        setTimeout(() => {
-          setCustomContent(
-            "This is the dynamically generated content appearing after loading starts."
-          )
-        }, 1500) // Example delay
-      }),
-      //if there was an error processing the initial solution
-      window.electronAPI.onSolutionError((error: string) => {
-        showToast(
-          "Processing Failed",
-          "There was an error processing your extra screenshots.",
-          "error"
-        )
-        // Reset solutions in the cache (even though this shouldn't ever happen) and complexities to previous states
-        const solution = queryClient.getQueryData(["solution"]) as {
-          code: string
-          thoughts: string[]
-          time_complexity: string
-          space_complexity: string
-        } | null
-        if (!solution) {
-          setView("queue") //make sure that this is correct. or like make sure there's a toast or something
-        }
-        setSolutionData(solution?.code || null)
-        setThoughtsData(solution?.thoughts || null)
-        setTimeComplexityData(solution?.time_complexity || null)
-        setSpaceComplexityData(solution?.space_complexity || null)
-        console.error("Processing error:", error)
-      }),
-      //when the initial solution is generated, we'll set the solution data to that
-      window.electronAPI.onSolutionSuccess((data) => {
-        if (!data?.solution) {
-          console.warn("Received empty or invalid solution data")
-          return
-        }
-
-        console.log({ solution: data.solution })
-
-        const solutionData = {
-          code: data.solution.code,
-          thoughts: data.solution.thoughts,
-          time_complexity: data.solution.time_complexity,
-          space_complexity: data.solution.space_complexity
-        }
-
-        queryClient.setQueryData(["solution"], solutionData)
-        setSolutionData(solutionData.code || null)
-        setThoughtsData(solutionData.thoughts || null)
-        setTimeComplexityData(solutionData.time_complexity || null)
-        setSpaceComplexityData(solutionData.space_complexity || null)
-      }),
-
-      //########################################################
-      //DEBUG EVENTS
-      //########################################################
-      window.electronAPI.onDebugStart(() => {
-        //we'll set the debug processing state to true and use that to render a little loader
-        setDebugProcessing(true)
-      }),
-      //the first time debugging works, we'll set the view to debug and populate the cache with the data
-      window.electronAPI.onDebugSuccess((data) => {
-        console.log({ debug_data: data })
-
-        queryClient.setQueryData(["new_solution"], data.solution)
-        setDebugProcessing(false)
-      }),
-      //when there was an error in the initial debugging, we'll show a toast and stop the little generating pulsing thing.
-      window.electronAPI.onDebugError(() => {
-        showToast(
-          "Processing Failed",
-          "There was an error debugging your code.",
-          "error"
-        )
-        setDebugProcessing(false)
-      }),
-      window.electronAPI.onProcessingNoScreenshots(() => {
-        showToast(
-          "No Screenshots",
-          "There are no extra screenshots to process.",
-          "neutral"
-        )
-      })
-    ]
-
-    return () => {
-      resizeObserver.disconnect()
-      cleanupFunctions.forEach((cleanup) => cleanup())
-    }
-  }, [isTooltipVisible, tooltipHeight])
+    return () => observer.disconnect()
+  }, [solution, loading, error])
 
   useEffect(() => {
-    setProblemStatementData(
-      queryClient.getQueryData(["problem_statement"]) || null
-    )
-    setSolutionData(queryClient.getQueryData(["solution"]) || null)
-
-    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
-      if (event?.query.queryKey[0] === "problem_statement") {
-        setProblemStatementData(
-          queryClient.getQueryData(["problem_statement"]) || null
-        )
-        // If this is from audio processing, show it in the custom content section
-        const audioResult = queryClient.getQueryData(["audio_result"]) as AudioResult | undefined;
-        if (audioResult) {
-          // Update all relevant sections when audio result is received
-          setProblemStatementData({
-            problem_statement: audioResult.text,
-            input_format: {
-              description: "Generated from audio input",
-              parameters: []
-            },
-            output_format: {
-              description: "Generated from audio input",
-              type: "string",
-              subtype: "text"
-            },
-            complexity: {
-              time: "N/A",
-              space: "N/A"
-            },
-            test_cases: [],
-            validation_type: "manual",
-            difficulty: "custom"
-          });
-          setSolutionData(null); // Reset solution to trigger loading state
-          setThoughtsData(null);
-          setTimeComplexityData(null);
-          setSpaceComplexityData(null);
-        }
-      }
-      if (event?.query.queryKey[0] === "solution") {
-        const solution = queryClient.getQueryData(["solution"]) as {
-          code: string
-          thoughts: string[]
-          time_complexity: string
-          space_complexity: string
-        } | null
-
-        setSolutionData(solution?.code ?? null)
-        setThoughtsData(solution?.thoughts ?? null)
-        setTimeComplexityData(solution?.time_complexity ?? null)
-        setSpaceComplexityData(solution?.space_complexity ?? null)
-      }
+    const removeStartListener = window.electronAPI.onProcessingStart(() => {
+      setLoading(true)
+      setError(null)
+      setSolution(null)
     })
-    return () => unsubscribe()
-  }, [queryClient])
+    const removeSuccessListener = window.electronAPI.onSolutionSuccess((data: any) => {
+      setLoading(false)
+      setSolution(data)
+    })
+    const removeErrorListener = window.electronAPI.onSolutionError((err: string) => {
+      setLoading(false)
+      setError(err)
+    })
+    return () => {
+      removeStartListener()
+      removeSuccessListener()
+      removeErrorListener()
+    }
+  }, [])
 
-  const handleTooltipVisibilityChange = (visible: boolean, height: number) => {
-    setIsTooltipVisible(visible)
-    setTooltipHeight(height)
+  const handleCopyCode = (code: string) => {
+    navigator.clipboard.writeText(code)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
   }
 
   return (
-    <>
-      {!isResetting && queryClient.getQueryData(["new_solution"]) ? (
-        <>
-          <Debug
-            isProcessing={debugProcessing}
-            setIsProcessing={setDebugProcessing}
-          />
-        </>
-      ) : (
-        <div ref={contentRef} className="relative space-y-3 px-4 py-3">
-          <Toast
-            open={toastOpen}
-            onOpenChange={setToastOpen}
-            variant={toastMessage.variant}
-            duration={3000}
-          >
-            <ToastTitle>{toastMessage.title}</ToastTitle>
-            <ToastDescription>{toastMessage.description}</ToastDescription>
-          </Toast>
-
-          {/* Conditionally render the screenshot queue if solutionData is available */}
-          {solutionData && (
-            <div className="bg-transparent w-fit">
-              <div className="pb-3">
-                <div className="space-y-3 w-fit">
-                  <ScreenshotQueue
-                    isLoading={debugProcessing}
-                    screenshots={extraScreenshots}
-                    onDeleteScreenshot={handleDeleteExtraScreenshot}
-                  />
-                </div>
+    <div 
+      ref={contentRef}
+      className="w-full min-h-[120px] p-2 font-sans select-none text-slate-200"
+    >
+      <div className="relative">
+        <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/10 via-blue-500/10 to-purple-500/10 blur-2xl opacity-40 rounded-3xl" />
+        
+        <div className="relative rounded-2xl bg-gradient-to-br from-slate-950/98 to-slate-900/98 backdrop-blur-2xl border border-cyan-500/20 shadow-2xl ring-1 ring-cyan-500/10 overflow-hidden flex flex-col">
+          
+          <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 bg-gradient-to-r from-white/[0.02] to-transparent">
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={() => setView("queue")}
+                className="group p-2 rounded-xl bg-white/5 hover:bg-cyan-500/20 border border-white/10 hover:border-cyan-500/30 text-slate-400 hover:text-cyan-300 transition-all duration-200 hover:shadow-lg hover:shadow-cyan-500/20"
+                title="Back to Queue"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m15 18-6-6 6-6"/>
+                </svg>
+              </button>
+              
+              <div className="h-5 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent" />
+              
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-5 bg-gradient-to-b from-cyan-500 to-blue-500 rounded-full shadow-lg shadow-cyan-500/50" />
+                <span className="text-xs font-bold tracking-widest text-cyan-300 uppercase">
+                  Analysis Protocol
+                </span>
               </div>
             </div>
-          )}
-
-          {/* Navbar of commands with the SolutionsHelper */}
-          <SolutionCommands
-            extraScreenshots={extraScreenshots}
-            onTooltipVisibilityChange={handleTooltipVisibilityChange}
-          />
-
-          {/* Main Content - Modified width constraints */}
-          <div className="w-full text-sm text-black bg-black/60 rounded-md">
-            <div className="rounded-lg overflow-hidden">
-              <div className="px-4 py-3 space-y-4 max-w-full">
-                {/* Show Screenshot or Audio Result as main output if validation_type is manual */}
-                {problemStatementData?.validation_type === "manual" ? (
-                  <ContentSection
-                    title={problemStatementData?.output_format?.subtype === "voice" ? "Audio Result" : "Screenshot Result"}
-                    content={problemStatementData.problem_statement}
-                    isLoading={false}
-                  />
-                ) : (
-                  <>
-                    {/* Problem Statement Section - Only for non-manual */}
-                    <ContentSection
-                      title={problemStatementData?.output_format?.subtype === "voice" ? "Voice Input" : "Problem Statement"}
-                      content={problemStatementData?.problem_statement}
-                      isLoading={!problemStatementData}
-                    />
-                    {/* Show loading state when waiting for solution */}
-                    {problemStatementData && !solutionData && (
-                      <div className="mt-4 flex">
-                        <p className="text-xs bg-gradient-to-r from-gray-300 via-gray-100 to-gray-300 bg-clip-text text-transparent animate-pulse">
-                          {problemStatementData?.output_format?.subtype === "voice" 
-                            ? "Processing voice input..." 
-                            : "Generating solutions..."}
-                        </p>
-                      </div>
-                    )}
-                    {/* Solution Sections (legacy, only for non-manual) */}
-                    {solutionData && (
-                      <>
-                        <ContentSection
-                          title="Analysis"
-                          content={
-                            thoughtsData && (
-                              <div className="space-y-3">
-                                <div className="space-y-1">
-                                  {thoughtsData.map((thought, index) => (
-                                    <div
-                                      key={index}
-                                      className="flex items-start gap-2"
-                                    >
-                                      <div className="w-1 h-1 rounded-full bg-blue-400/80 mt-2 shrink-0" />
-                                      <div>{thought}</div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )
-                          }
-                          isLoading={!thoughtsData}
-                        />
-                        <SolutionSection
-                          title={problemStatementData?.output_format?.subtype === "voice" ? "Response" : "Solution"}
-                          content={solutionData}
-                          isLoading={!solutionData}
-                        />
-                        {problemStatementData?.output_format?.subtype !== "voice" && (
-                          <ComplexitySection
-                            timeComplexity={timeComplexityData}
-                            spaceComplexity={spaceComplexityData}
-                            isLoading={!timeComplexityData || !spaceComplexityData}
-                          />
-                        )}
-                      </>
-                    )}
-                  </>
-                )}
-              </div>
+            
+            <div className="flex items-center gap-3">
+              {loading && (
+                <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-cyan-950/50 to-blue-950/50 border border-cyan-500/30 shadow-lg shadow-cyan-500/10">
+                  <div className="relative">
+                    <span className="w-2 h-2 bg-cyan-400 rounded-full animate-pulse shadow-lg shadow-cyan-500/50 block" />
+                    <span className="absolute inset-0 w-2 h-2 bg-cyan-400 rounded-full animate-ping" />
+                  </div>
+                  <span className="text-[10px] text-cyan-300 font-bold tracking-widest">PROCESSING</span>
+                </div>
+              )}
+              <button
+                onClick={() => setView("debug")}
+                className="text-[10px] font-bold px-4 py-2 rounded-lg bg-gradient-to-r from-slate-800/50 to-slate-700/50 hover:from-slate-700/70 hover:to-slate-600/70 text-slate-300 hover:text-white border border-white/10 hover:border-white/20 transition-all duration-200 uppercase tracking-wider shadow-sm hover:shadow-lg"
+              >
+                DEBUG
+              </button>
             </div>
           </div>
+
+          <div className="p-6 space-y-6 max-h-[85vh] overflow-y-auto custom-scrollbar">
+            
+            {loading && (
+              <div className="flex flex-col items-center justify-center py-20 space-y-6">
+                <div className="relative w-16 h-16">
+                  <div className="absolute inset-0 border-4 border-cyan-500/10 rounded-full" />
+                  <div className="absolute inset-0 border-t-4 border-cyan-500 rounded-full animate-spin shadow-lg shadow-cyan-500/30" />
+                  <div className="absolute inset-2 border-4 border-blue-500/10 rounded-full" />
+                  <div className="absolute inset-2 border-t-4 border-blue-500 rounded-full animate-spin animation-delay-150 shadow-lg shadow-blue-500/30" />
+                </div>
+                <div className="text-center space-y-2">
+                  <p className="text-sm text-cyan-300 tracking-widest font-bold animate-pulse">ANALYZING DATA</p>
+                  <p className="text-[10px] text-slate-500 tracking-wider">Neural networks processing...</p>
+                </div>
+              </div>
+            )}
+
+            {error && (
+              <div className="relative group">
+                <div className="absolute inset-0 bg-gradient-to-r from-red-500/20 to-rose-500/20 blur-xl opacity-60 rounded-2xl" />
+                <div className="relative p-5 rounded-xl bg-gradient-to-br from-red-950/40 to-rose-950/40 border border-red-500/30 flex items-start gap-4 shadow-xl">
+                  <div className="p-3 rounded-xl bg-gradient-to-br from-red-500/20 to-rose-500/20 text-red-400 border border-red-500/30 shadow-lg">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="12" cy="12" r="10"/>
+                      <line x1="12" y1="8" x2="12" y2="12"/>
+                      <line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="text-sm font-bold text-red-200 mb-2 tracking-wide">ANALYSIS FAILED</h4>
+                    <p className="text-xs text-red-200/80 leading-relaxed">{error}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {solution && (
+              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                
+                {solution.problem_statement && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 px-1">
+                      <div className="w-1 h-4 bg-gradient-to-b from-slate-500 to-slate-600 rounded-full" />
+                      <h3 className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Identified Problem</h3>
+                    </div>
+                    <div className="relative group">
+                      <div className="absolute inset-0 bg-gradient-to-r from-slate-700/10 to-slate-600/10 blur-xl opacity-0 group-hover:opacity-100 transition-opacity rounded-xl" />
+                      <div className="relative p-4 rounded-xl bg-gradient-to-br from-slate-800/50 to-slate-900/50 border border-white/10 text-sm text-slate-200 leading-relaxed shadow-lg backdrop-blur-sm">
+                        {solution.problem_statement}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {solution.solution?.code && (
+                  <div className="space-y-3 group">
+                    <div className="flex items-center justify-between px-1">
+                      <div className="flex items-center gap-2">
+                        <div className="w-1 h-4 bg-gradient-to-b from-cyan-500 to-blue-500 rounded-full shadow-lg shadow-cyan-500/50" />
+                        <h3 className="text-[10px] uppercase tracking-widest text-cyan-400 font-bold">Solution Logic</h3>
+                      </div>
+                      <button
+                        onClick={() => handleCopyCode(solution.solution.code)}
+                        className={`text-[10px] flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all duration-200 font-bold tracking-wide ${
+                          copied 
+                            ? 'bg-green-500/20 border border-green-500/40 text-green-300 shadow-lg shadow-green-500/20' 
+                            : 'bg-white/5 hover:bg-cyan-500/20 border border-white/10 hover:border-cyan-500/30 text-slate-400 hover:text-cyan-300 opacity-0 group-hover:opacity-100'
+                        }`}
+                      >
+                        {copied ? (
+                          <>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                              <polyline points="20 6 9 17 4 12"/>
+                            </svg>
+                            <span>COPIED</span>
+                          </>
+                        ) : (
+                          <>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                            </svg>
+                            <span>COPY CODE</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    
+                    <div className="relative">
+                      <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 blur-xl opacity-60 rounded-xl" />
+                      <div className="relative rounded-xl overflow-hidden border border-cyan-500/20 bg-[#1e1e1e] shadow-2xl ring-1 ring-cyan-500/10">
+                        <div className="flex items-center justify-between px-4 py-2 bg-gradient-to-r from-slate-900/80 to-slate-800/80 border-b border-cyan-500/20">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-red-500/80 shadow-sm" />
+                            <div className="w-2 h-2 rounded-full bg-yellow-500/80 shadow-sm" />
+                            <div className="w-2 h-2 rounded-full bg-green-500/80 shadow-sm" />
+                          </div>
+                          <span className="text-[9px] text-slate-500 font-mono tracking-wider">solution.py</span>
+                        </div>
+                        <div className="select-text cursor-text">
+                          <SyntaxHighlighter
+                            language="python"
+                            style={vscDarkPlus}
+                            customStyle={{ 
+                              margin: 0, 
+                              padding: "1.5rem", 
+                              background: "transparent", 
+                              fontSize: "0.8rem", 
+                              lineHeight: "1.7",
+                              fontFamily: "'Fira Code', 'Consolas', monospace"
+                            }}
+                            wrapLines={true}
+                            wrapLongLines={true}
+                          >
+                            {solution.solution.code}
+                          </SyntaxHighlighter>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {solution.reasoning && (
+                  <div className="relative group">
+                    <div className="absolute inset-0 bg-gradient-to-r from-purple-500/5 to-blue-500/5 blur-xl opacity-0 group-hover:opacity-100 transition-opacity rounded-xl" />
+                    <div className="relative flex gap-4 items-start px-4 py-4 rounded-xl bg-gradient-to-br from-slate-800/30 to-slate-900/30 border border-white/5 backdrop-blur-sm">
+                      <div className="w-1 h-16 bg-gradient-to-b from-cyan-500/40 via-blue-500/40 to-purple-500/40 rounded-full flex-shrink-0 shadow-lg" />
+                      <div className="space-y-2 flex-1">
+                        <div className="flex items-center gap-2">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-cyan-400">
+                            <circle cx="12" cy="12" r="10"/>
+                            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                            <line x1="12" y1="17" x2="12.01" y2="17"/>
+                          </svg>
+                          <h3 className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Reasoning</h3>
+                        </div>
+                        <p className="text-xs text-slate-300 italic leading-relaxed pl-1">{solution.reasoning}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      )}
-    </>
+      </div>
+    </div>
   )
 }
 

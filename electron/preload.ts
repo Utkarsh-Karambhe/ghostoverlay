@@ -10,6 +10,12 @@ interface ElectronAPI {
   deleteScreenshot: (
     path: string
   ) => Promise<{ success: boolean; error?: string }>
+  onOcrResult: (callback: (text: string) => void) => () => void
+  onOcrStart: (callback: () => void) => () => void
+  
+  // ADDED THIS:
+  onEnterSnippingMode: (callback: () => void) => () => void
+
   onScreenshotTaken: (
     callback: (data: { path: string; preview: string }) => void
   ) => () => void
@@ -70,6 +76,30 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getScreenshots: () => ipcRenderer.invoke("get-screenshots"),
   deleteScreenshot: (path: string) =>
     ipcRenderer.invoke("delete-screenshot", path),
+
+  onOcrResult: (callback: (text: string) => void) => {
+    const subscription = (_: any, text: string) => callback(text)
+    ipcRenderer.on("ocr-result", subscription)
+    return () => {
+      ipcRenderer.removeListener("ocr-result", subscription)
+    }
+  },
+  onOcrStart: (callback: () => void) => {
+    const subscription = () => callback()
+    ipcRenderer.on("ocr-start", subscription)
+    return () => {
+      ipcRenderer.removeListener("ocr-start", subscription)
+    }
+  },
+
+  // ADDED IMPLEMENTATION HERE:
+  onEnterSnippingMode: (callback: () => void) => {
+    const subscription = () => callback()
+    ipcRenderer.on("enter-snipping-mode", subscription)
+    return () => {
+      ipcRenderer.removeListener("enter-snipping-mode", subscription)
+    }
+  },
 
   // Event listeners
   onScreenshotTaken: (

@@ -1,4 +1,7 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage } from "electron"
+// CHANGE THIS LINE:
+import { app, BrowserWindow, Tray, Menu, nativeImage, systemPreferences, session } from "electron"
+// (I added systemPreferences and session)
+
 import { initializeIpcHandlers } from "./ipcHandlers"
 import { WindowHelper } from "./WindowHelper"
 import { ScreenshotHelper } from "./ScreenshotHelper"
@@ -8,8 +11,8 @@ import { ProcessingHelper } from "./ProcessingHelper"
 export class AppState {
   private static instance: AppState | null = null
 
-  private windowHelper: WindowHelper
-  private screenshotHelper: ScreenshotHelper
+  public windowHelper: WindowHelper
+  public screenshotHelper: ScreenshotHelper
   public shortcutsHelper: ShortcutsHelper
   public processingHelper: ProcessingHelper
   private tray: Tray | null = null
@@ -268,19 +271,47 @@ export class AppState {
 }
 
 // Application initialization
+// Application initialization
 async function initializeApp() {
   const appState = AppState.getInstance()
 
   // Initialize IPC handlers before window creation
   initializeIpcHandlers(appState)
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => { // Note: added async here
     console.log("App is ready")
+
+    // --- NEW PERMISSION LOGIC START ---
+    
+    // 1. Automatically allow "media" (mic) requests from our own renderer
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+      if (permission === 'media') {
+        callback(true); // Approve microphone access
+      } else {
+        callback(false);
+      }
+    });
+
+    // 2. Explicitly ask macOS for microphone access now
+    if (process.platform === 'darwin') {
+      const status = systemPreferences.getMediaAccessStatus('microphone');
+      if (status === 'not-determined') {
+        const success = await systemPreferences.askForMediaAccess('microphone');
+        console.log('Microphone access requested. Result:', success);
+      } else {
+        console.log('Microphone access status:', status);
+      }
+    }
+    // --- NEW PERMISSION LOGIC END ---
+
     appState.createWindow()
     appState.createTray()
     // Register global shortcuts using ShortcutsHelper
     appState.shortcutsHelper.registerGlobalShortcuts()
   })
+
+  // ... rest of your code (app.on("activate")...)
+
 
   app.on("activate", () => {
     console.log("App activated")
