@@ -93,6 +93,9 @@ export function initializeIpcHandlers(appState: AppState): void {
     if (!mainWindow) return { success: false, error: "No main window" };
 
     try {
+      // Get window offset (e.g. for menu bar/notch)
+      const bounds = mainWindow.getBounds();
+
       // Hide our overlay window so it isn't captured
       mainWindow.setOpacity(0);
       mainWindow.hide();
@@ -117,8 +120,8 @@ export function initializeIpcHandlers(appState: AppState): void {
       const scaleFactor = display.scaleFactor || 1;
 
       const scaled: Rect = {
-        x: Math.round(rect.x * scaleFactor),
-        y: Math.round(rect.y * scaleFactor),
+        x: Math.round((rect.x + bounds.x) * scaleFactor),
+        y: Math.round((rect.y + bounds.y) * scaleFactor),
         width: Math.round(rect.width * scaleFactor),
         height: Math.round(rect.height * scaleFactor),
       };

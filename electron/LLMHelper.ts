@@ -8,6 +8,7 @@ interface OllamaResponse {
 
 export class LLMHelper {
   private model: GenerativeModel | null = null
+  
   // UPDATED PROMPT: More direct and balanced for code vs text
   private readonly systemPrompt = `You are Wingman AI, a professional-grade assistant designed for developers and technical professionals.
 
@@ -46,7 +47,27 @@ EDGE CASES:
 - If performance/security tradeoffs exist, mention them.
 - If deprecated syntax is detected, suggest the modern alternative.`
 
-  
+  private readonly aptitudeReasoningPrompt = `
+SPECIAL INSTRUCTION (MANDATORY):
+
+If the question belongs to ANY of the following categories:
+- Verbal Reasoning
+- Logical Reasoning
+- Quantitative Aptitude
+- Analytical Reasoning
+- Critical Reasoning
+
+Then you MUST:
+1. Solve the problem step-by-step
+2. Clearly explain each logical or mathematical step
+3. Show how you arrive at the final answer
+4. Keep explanations concise but complete
+5. End with a clearly labeled FINAL ANSWER
+
+Do NOT skip steps.
+Do NOT give only the final answer.
+`
+
   private useOllama: boolean = false
   private ollamaModel: string = "llama3.2"
   private ollamaUrl: string = "http://localhost:11434"
@@ -170,7 +191,7 @@ EDGE CASES:
 
       const imageParts = await Promise.all(imagePaths.map(path => this.fileToGenerativePart(path)))
       
-      const prompt = `${this.systemPrompt}\n\nYou are a wingman. Please analyze these images and extract the following information in JSON format:\n{
+      const prompt = `${this.systemPrompt}\n${this.aptitudeReasoningPrompt}\n\nYou are a wingman. Please analyze these images and extract the following information in JSON format:\n{
   "problem_statement": "A clear statement of the problem or situation depicted in the images.",
   "context": "Relevant background or context from the images.",
   "suggested_responses": ["First possible answer or action", "Second possible answer or action", "..."],
@@ -188,7 +209,7 @@ EDGE CASES:
   }
 
   public async generateSolution(problemInfo: any) {
-    const prompt = `${this.systemPrompt}\n\nGiven this problem or situation:\n${JSON.stringify(problemInfo, null, 2)}\n\nPlease provide your response in the following JSON format:\n{
+    const prompt = `${this.systemPrompt}\n${this.aptitudeReasoningPrompt}\n\nGiven this problem or situation:\n${JSON.stringify(problemInfo, null, 2)}\n\nPlease provide your response in the following JSON format:\n{
   "solution": {
     "code": "The code or main answer here.",
     "problem_statement": "Restate the problem or situation.",
@@ -229,7 +250,7 @@ EDGE CASES:
 
       const imageParts = await Promise.all(debugImagePaths.map(path => this.fileToGenerativePart(path)))
       
-      const prompt = `${this.systemPrompt}\n\nYou are a wingman. Given:\n1. The original problem or situation: ${JSON.stringify(problemInfo, null, 2)}\n2. The current response or approach: ${currentCode}\n3. The debug information in the provided images\n\nPlease analyze the debug information and provide feedback in this JSON format:\n{
+      const prompt = `${this.systemPrompt}\n${this.aptitudeReasoningPrompt}\n\nYou are a wingman. Given:\n1. The original problem or situation: ${JSON.stringify(problemInfo, null, 2)}\n2. The current response or approach: ${currentCode}\n3. The debug information in the provided images\n\nPlease analyze the debug information and provide feedback in this JSON format:\n{
   "solution": {
     "code": "The code or main answer here.",
     "problem_statement": "Restate the problem or situation.",
@@ -266,7 +287,7 @@ EDGE CASES:
           mimeType: "audio/mp3"
         }
       };
-      const prompt = `${this.systemPrompt}\n\nDescribe this audio clip in a short, concise answer.`;
+      const prompt = `${this.systemPrompt}\n${this.aptitudeReasoningPrompt}\n\nDescribe this audio clip in a short, concise answer.`;
       const result = await this.model.generateContent([prompt, audioPart]);
       const response = await result.response;
       const text = response.text();
@@ -291,7 +312,7 @@ EDGE CASES:
           mimeType
         }
       };
-      const prompt = `${this.systemPrompt}\n\nDescribe this audio clip in a short, concise answer.`;
+      const prompt = `${this.systemPrompt}\n${this.aptitudeReasoningPrompt}\n\nDescribe this audio clip in a short, concise answer.`;
       const result = await this.model.generateContent([prompt, audioPart]);
       const response = await result.response;
       const text = response.text();
@@ -305,9 +326,7 @@ EDGE CASES:
   public async analyzeImageFile(imagePath: string) {
     try {
       // If using Ollama, we try to use LLaVA if installed, otherwise basic text fallback
-      // For now, let's assume if it's Ollama, we just can't do vision unless the model supports it.
       if (this.useOllama) {
-         // Simple fallback if you wanted to implement LLaVA later
          return { text: "Image analysis requires Gemini or a Vision-capable Ollama model (e.g. LLaVA).", timestamp: Date.now() }
       }
 
@@ -324,6 +343,7 @@ EDGE CASES:
   
       const prompt = `
   ${this.systemPrompt}
+  ${this.aptitudeReasoningPrompt}
   
   You are analyzing a screenshot provided by the user.
   
@@ -366,10 +386,13 @@ EDGE CASES:
   
   public async chatWithGemini(message: string): Promise<string> {
     try {
+      // Inject both system prompts into the message flow for chat
+      const combinedPrompt = `${this.systemPrompt}\n${this.aptitudeReasoningPrompt}\n\nUser Question: ${message}`;
+      
       if (this.useOllama) {
-        return this.callOllama(message);
+        return this.callOllama(combinedPrompt);
       } else if (this.model) {
-        const result = await this.model.generateContent(message);
+        const result = await this.model.generateContent(combinedPrompt);
         const response = await result.response;
         return response.text();
       } else {
