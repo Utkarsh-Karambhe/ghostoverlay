@@ -3,9 +3,9 @@ import { app } from "electron"
 import * as fs from "fs"
 import { exec } from "child_process"
 import { promisify } from "util"
-import Tesseract from 'tesseract.js';
+import { createWorker, Worker as TesseractWorker } from 'tesseract.js';
 import { v4 as uuidv4 } from "uuid"
-import { createWorker } from 'tesseract.js';
+import sharp from "sharp"
 
 // Use native macOS command for reliability
 const execAsync = promisify(exec)
@@ -19,6 +19,11 @@ export class ScreenshotHelper {
   private readonly extraScreenshotDir: string
 
   private view: "queue" | "solutions" = "queue"
+
+  // Reusable Tesseract worker with idle auto-termination
+  private ocrWorker: TesseractWorker | null = null
+  private ocrIdleTimer: ReturnType<typeof setTimeout> | null = null
+  private readonly OCR_IDLE_TIMEOUT_MS = 30_000 // 30 seconds
 
   constructor(view: "queue" | "solutions" = "queue") {
     this.view = view
@@ -71,41 +76,59 @@ export class ScreenshotHelper {
 
     clearDir(this.screenshotDir)
     clearDir(this.extraScreenshotDir)
-    
+
     this.screenshotQueue = []
     this.extraScreenshotQueue = []
   }
 
   /**
-   * EXTRACT TEXT FROM IMAGE (OCR)
+   * Get or create a reusable Tesseract OCR worker.
+   * Auto-terminates after 30s of idle to free memory.
    */
-    /**
-   * EXTRACT TEXT FROM IMAGE (OCR)
-   */
-      /**
-   * EXTRACT TEXT FROM IMAGE (OCR)
+  private async getOcrWorker(): Promise<TesseractWorker> {
+    // Reset idle timer on every call
+    if (this.ocrIdleTimer) {
+      clearTimeout(this.ocrIdleTimer)
+      this.ocrIdleTimer = null
+    }
+
+    if (!this.ocrWorker) {
+      console.log("[OCR] Creating new Tesseract worker...")
+      this.ocrWorker = await createWorker('eng')
+      console.log("[OCR] Worker ready.")
+    }
+
+    // Schedule auto-termination after idle period
+    this.ocrIdleTimer = setTimeout(async () => {
+      if (this.ocrWorker) {
+        console.log("[OCR] Terminating idle worker to free memory.")
+        await this.ocrWorker.terminate()
+        this.ocrWorker = null
+      }
+    }, this.OCR_IDLE_TIMEOUT_MS)
+
+    return this.ocrWorker
+  }
+
+  /**
+   * EXTRACT TEXT FROM IMAGE (OCR) — uses reusable worker
    */
   async extractTextFromImage(imageBuffer: Buffer): Promise<string> {
     try {
       console.log("Running OCR on screenshot...");
-      
-      // Simple approach: just use recognize() directly
-      // Tesseract.js will download the language file if needed
-      const { data: { text } } = await Tesseract.recognize(
-        imageBuffer,
-        'eng'
-      );
-      
+      const worker = await this.getOcrWorker()
+      const { data: { text } } = await worker.recognize(imageBuffer)
       console.log(`OCR Extracted ${text.length} characters.`);
       return text.trim();
-      
     } catch (error) {
       console.error("OCR Failed:", error);
-      return ""; // Return empty string, not error message
+      // If the worker errored, clear it so a fresh one is created next time
+      this.ocrWorker = null
+      return "";
     }
   }
 
-  
+
 
   public async takeScreenshot(
     hideMainWindow: () => void,
@@ -113,7 +136,7 @@ export class ScreenshotHelper {
   ): Promise<string> {
     try {
       hideMainWindow()
-      
+
       // Wait for window to disappear animation (increased to 300ms)
       await new Promise(resolve => setTimeout(resolve, 300))
 
@@ -176,8 +199,12 @@ export class ScreenshotHelper {
 
   public async getImagePreview(filepath: string): Promise<string> {
     try {
-      const data = await fs.promises.readFile(filepath)
-      return `data:image/png;base64,${data.toString("base64")}`
+      // Resize to a small thumbnail to avoid holding full-res PNGs in memory
+      const thumbnail = await sharp(filepath)
+        .resize({ width: 400, withoutEnlargement: true })
+        .jpeg({ quality: 70 })
+        .toBuffer()
+      return `data:image/jpeg;base64,${thumbnail.toString("base64")}`
     } catch (error) {
       console.error("Error reading image:", error)
       throw error
@@ -187,10 +214,10 @@ export class ScreenshotHelper {
   public async deleteScreenshot(path: string): Promise<{ success: boolean; error?: string }> {
     try {
       if (fs.existsSync(path)) fs.unlinkSync(path)
-      
+
       this.screenshotQueue = this.screenshotQueue.filter(p => p !== path)
       this.extraScreenshotQueue = this.extraScreenshotQueue.filter(p => p !== path)
-      
+
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message }

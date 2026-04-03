@@ -17,7 +17,7 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: Infinity,
-      cacheTime: Infinity
+      cacheTime: 5 * 60 * 1000 // 5 minutes — prevents unbounded memory growth
     }
   }
 })
@@ -33,8 +33,11 @@ const App: React.FC = () => {
     document.documentElement.style.backgroundColor = "transparent"
   }, [])
 
+  
+
   useEffect(() => {
     if (!containerRef.current) return
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
     const updateSize = () => {
       if (!containerRef.current) return
       if (view === "snipping") return
@@ -42,8 +45,12 @@ const App: React.FC = () => {
       const width = containerRef.current.scrollWidth
       window.electronAPI?.updateContentDimensions({ width, height })
     }
-    const resizeObserver = new ResizeObserver(() => updateSize())
-    const mutationObserver = new MutationObserver(() => updateSize())
+    const debouncedUpdate = () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(updateSize, 150)
+    }
+    const resizeObserver = new ResizeObserver(() => debouncedUpdate())
+    const mutationObserver = new MutationObserver(() => debouncedUpdate())
     updateSize()
     resizeObserver.observe(containerRef.current)
     mutationObserver.observe(containerRef.current, {
@@ -53,6 +60,7 @@ const App: React.FC = () => {
       characterData: true
     })
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
       resizeObserver.disconnect()
       mutationObserver.disconnect()
     }
@@ -60,13 +68,13 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const removeOcr = window.electronAPI.onOcrResult?.((text: string) => {
-        setOcrText(text)
-        setView("queue")
-      }) || (() => {})
+      setOcrText(text)
+      setView("queue")
+    }) || (() => { })
     const removeResetListener = window.electronAPI.onResetView?.(() => {
-        setView("queue")
-      }) || (() => {})
-    let removeSnipModeListener = () => {}
+      setView("queue")
+    }) || (() => { })
+    let removeSnipModeListener = () => { }
     if (window.electronAPI.onEnterSnippingMode) {
       removeSnipModeListener = window.electronAPI.onEnterSnippingMode(() => {
         setView("snipping")
@@ -87,8 +95,8 @@ const App: React.FC = () => {
 
   const renderView = () => {
     const baseClasses = "transition-all duration-300 ease-out"
-    const animationClasses = isTransitioning 
-      ? "opacity-0 scale-[0.98]" 
+    const animationClasses = isTransitioning
+      ? "opacity-0 scale-[0.98]"
       : "opacity-100 scale-100"
 
     switch (view) {

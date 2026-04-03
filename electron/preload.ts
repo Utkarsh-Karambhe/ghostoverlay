@@ -12,7 +12,7 @@ interface ElectronAPI {
   ) => Promise<{ success: boolean; error?: string }>
   onOcrResult: (callback: (text: string) => void) => () => void
   onOcrStart: (callback: () => void) => () => void
-  
+
   // ADDED THIS:
   onEnterSnippingMode: (callback: () => void) => () => void
 
@@ -40,14 +40,19 @@ interface ElectronAPI {
   analyzeAudioFile: (path: string) => Promise<{ text: string; timestamp: number }>
   analyzeImageFile: (path: string) => Promise<void>
   quitApp: () => Promise<void>
-  
+
   // LLM Model Management
   getCurrentLlmConfig: () => Promise<{ provider: "ollama" | "gemini"; model: string; isOllama: boolean }>
   getAvailableOllamaModels: () => Promise<string[]>
   switchToOllama: (model?: string, url?: string) => Promise<{ success: boolean; error?: string }>
   switchToGemini: (apiKey?: string) => Promise<{ success: boolean; error?: string }>
   testLlmConnection: () => Promise<{ success: boolean; error?: string }>
-  
+
+  // Streaming chat
+  onChatStreamChunk: (callback: (chunk: string) => void) => () => void
+  onChatStreamDone: (callback: (fullText: string) => void) => () => void
+  onChatStreamError: (callback: (error: string) => void) => () => void
+
   invoke: (channel: string, ...args: any[]) => Promise<any>
 }
 
@@ -209,13 +214,36 @@ contextBridge.exposeInMainWorld("electronAPI", {
   analyzeAudioFile: (path: string) => ipcRenderer.invoke("analyze-audio-file", path),
   analyzeImageFile: (path: string) => ipcRenderer.invoke("analyze-image-file", path),
   quitApp: () => ipcRenderer.invoke("quit-app"),
-  
+
   // LLM Model Management
   getCurrentLlmConfig: () => ipcRenderer.invoke("get-current-llm-config"),
   getAvailableOllamaModels: () => ipcRenderer.invoke("get-available-ollama-models"),
   switchToOllama: (model?: string, url?: string) => ipcRenderer.invoke("switch-to-ollama", model, url),
   switchToGemini: (apiKey?: string) => ipcRenderer.invoke("switch-to-gemini", apiKey),
   testLlmConnection: () => ipcRenderer.invoke("test-llm-connection"),
-  
+
+  // Streaming chat
+  onChatStreamChunk: (callback: (chunk: string) => void) => {
+    const subscription = (_: any, chunk: string) => callback(chunk)
+    ipcRenderer.on("chat-stream-chunk", subscription)
+    return () => {
+      ipcRenderer.removeListener("chat-stream-chunk", subscription)
+    }
+  },
+  onChatStreamDone: (callback: (fullText: string) => void) => {
+    const subscription = (_: any, fullText: string) => callback(fullText)
+    ipcRenderer.on("chat-stream-done", subscription)
+    return () => {
+      ipcRenderer.removeListener("chat-stream-done", subscription)
+    }
+  },
+  onChatStreamError: (callback: (error: string) => void) => {
+    const subscription = (_: any, error: string) => callback(error)
+    ipcRenderer.on("chat-stream-error", subscription)
+    return () => {
+      ipcRenderer.removeListener("chat-stream-error", subscription)
+    }
+  },
+
   invoke: (channel: string, ...args: any[]) => ipcRenderer.invoke(channel, ...args)
 } as ElectronAPI)

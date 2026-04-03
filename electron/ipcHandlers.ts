@@ -64,6 +64,8 @@ export function initializeIpcHandlers(appState: AppState): void {
     return { success: true };
   });
 
+  
+
   safeHandle("reset-queues", async () => {
     try {
       appState.clearQueues();
@@ -104,8 +106,8 @@ export function initializeIpcHandlers(appState: AppState): void {
       // IMPORTANT: Don't call appState.takeScreenshot() here because that function
       // hides/shows the window internally. We already hid it; we want it to stay hidden.
       const fullPath = await appState.screenshotHelper.takeScreenshot(
-        () => {},
-        () => {}
+        () => { },
+        () => { }
       );
 
       // Restore window state (exit snipping mode) *before* sending UI events
@@ -133,11 +135,14 @@ export function initializeIpcHandlers(appState: AppState): void {
       const h = clamp(scaled.height, 1, Math.max(1, size.height - y));
 
       const cropped = image.crop({ x, y, width: w, height: h });
-      const buffer = cropped.toPNG();
+      let buffer: Buffer | null = cropped.toPNG();
 
       fs.writeFileSync(fullPath, buffer);
 
       const preview = `data:image/png;base64,${buffer.toString("base64")}`;
+
+      // Release large image buffers for GC
+      buffer = null;
 
       // Update UI: exit snipping overlay + add screenshot to list
       mainWindow.webContents.send("reset-view");
@@ -145,7 +150,9 @@ export function initializeIpcHandlers(appState: AppState): void {
 
       // Run OCR and send result (this is what your React flow listens for)
       mainWindow.webContents.send("ocr-start");
-      const text = await appState.screenshotHelper.extractTextFromImage(buffer);
+      const text = await appState.screenshotHelper.extractTextFromImage(
+        fs.readFileSync(fullPath)
+      );
       mainWindow.webContents.send("ocr-result", text);
 
       return { success: true, path: fullPath };
@@ -183,6 +190,31 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle("gemini-chat", async (_event, message: string) => {
     return appState.processingHelper.getLLMHelper().chatWithGemini(message);
+  });
+
+  safeHandle("gemini-chat-stream", async (_event, message: string) => {
+    const mainWindow = appState.getMainWindow();
+    if (!mainWindow) return { success: false, error: "No main window" };
+
+    try {
+      const fullText = await appState.processingHelper.getLLMHelper().chatWithGeminiStream(
+        message,
+        (chunk: string) => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send("chat-stream-chunk", chunk);
+          }
+        }
+      );
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("chat-stream-done", fullText);
+      }
+      return { success: true };
+    } catch (error: any) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("chat-stream-error", error?.message ?? String(error));
+      }
+      return { success: false, error: error?.message ?? String(error) };
+    }
   });
 
   safeHandle("quit-app", async () => {

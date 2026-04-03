@@ -188,7 +188,7 @@ export class AppState {
   public createTray(): void {
     // Create a simple tray icon
     const image = nativeImage.createEmpty()
-    
+
     // Try to use a system template image for better integration
     let trayImage = image
     try {
@@ -198,9 +198,9 @@ export class AppState {
       console.log("Using empty tray image")
       trayImage = nativeImage.createEmpty()
     }
-    
+
     this.tray = new Tray(trayImage)
-    
+
     const contextMenu = Menu.buildFromTemplate([
       {
         label: 'Show Interview Coder',
@@ -246,15 +246,15 @@ export class AppState {
         }
       }
     ])
-    
+
     this.tray.setToolTip('Interview Coder - Press Cmd+Shift+Space to show')
     this.tray.setContextMenu(contextMenu)
-    
+
     // Set a title for macOS (will appear in menu bar)
     if (process.platform === 'darwin') {
       this.tray.setTitle('IC')
     }
-    
+
     // Double-click to show window
     this.tray.on('double-click', () => {
       this.centerAndShowWindow()
@@ -282,7 +282,7 @@ async function initializeApp() {
     console.log("App is ready")
 
     // --- NEW PERMISSION LOGIC START ---
-    
+
     // 1. Automatically allow "media" (mic) requests from our own renderer
     session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
       if (permission === 'media') {
@@ -328,7 +328,6 @@ async function initializeApp() {
   })
 
   app.dock?.hide() // Hide dock icon (optional)
-  app.commandLine.appendSwitch("disable-background-timer-throttling")
 }
 
 // Start the application
